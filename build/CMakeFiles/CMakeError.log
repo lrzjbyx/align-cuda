@@ -1,0 +1,55 @@
+Determining if the pthread_create exist failed with the following output:
+Change Dir: /home/zzu/scene_seal/align-cuda/build/CMakeFiles/CMakeTmp
+
+Run Build Command:"/usr/bin/make" "cmTC_2f333/fast"
+/usr/bin/make -f CMakeFiles/cmTC_2f333.dir/build.make CMakeFiles/cmTC_2f333.dir/build
+make[1]: 进入目录“/home/zzu/scene_seal/align-cuda/build/CMakeFiles/CMakeTmp”
+Building CXX object CMakeFiles/cmTC_2f333.dir/CheckSymbolExists.cxx.o
+/usr/bin/g++    -std=gnu++14 -o CMakeFiles/cmTC_2f333.dir/CheckSymbolExists.cxx.o -c /home/zzu/scene_seal/align-cuda/build/CMakeFiles/CMakeTmp/CheckSymbolExists.cxx
+Linking CXX executable cmTC_2f333
+/usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_2f333.dir/link.txt --verbose=1
+/usr/bin/g++       CMakeFiles/cmTC_2f333.dir/CheckSymbolExists.cxx.o  -o cmTC_2f333 
+CMakeFiles/cmTC_2f333.dir/CheckSymbolExists.cxx.o：在函数‘main’中：
+CheckSymbolExists.cxx:(.text+0x1b)：对‘pthread_create’未定义的引用
+collect2: error: ld returned 1 exit status
+CMakeFiles/cmTC_2f333.dir/build.make:97: recipe for target 'cmTC_2f333' failed
+make[1]: *** [cmTC_2f333] Error 1
+make[1]: 离开目录“/home/zzu/scene_seal/align-cuda/build/CMakeFiles/CMakeTmp”
+Makefile:126: recipe for target 'cmTC_2f333/fast' failed
+make: *** [cmTC_2f333/fast] Error 2
+
+File /home/zzu/scene_seal/align-cuda/build/CMakeFiles/CMakeTmp/CheckSymbolExists.cxx:
+/* */
+#include <pthread.h>
+
+int main(int argc, char** argv)
+{
+  (void)argv;
+#ifndef pthread_create
+  return ((int*)(&pthread_create))[argc];
+#else
+  (void)argc;
+  return 0;
+#endif
+}
+
+Determining if the function pthread_create exists in the pthreads failed with the following output:
+Change Dir: /home/zzu/scene_seal/align-cuda/build/CMakeFiles/CMakeTmp
+
+Run Build Command:"/usr/bin/make" "cmTC_cce8f/fast"
+/usr/bin/make -f CMakeFiles/cmTC_cce8f.dir/build.make CMakeFiles/cmTC_cce8f.dir/build
+make[1]: 进入目录“/home/zzu/scene_seal/align-cuda/build/CMakeFiles/CMakeTmp”
+Building CXX object CMakeFiles/cmTC_cce8f.dir/CheckFunctionExists.cxx.o
+/usr/bin/g++    -DCHECK_FUNCTION_EXISTS=pthread_create   -std=gnu++14 -o CMakeFiles/cmTC_cce8f.dir/CheckFunctionExists.cxx.o -c /home/zzu/scene_seal/align-cuda/build/CMakeFiles/CheckLibraryExists/CheckFunctionExists.cxx
+Linking CXX executable cmTC_cce8f
+/usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_cce8f.dir/link.txt --verbose=1
+/usr/bin/g++   -DCHECK_FUNCTION_EXISTS=pthread_create    CMakeFiles/cmTC_cce8f.dir/CheckFunctionExists.cxx.o  -o cmTC_cce8f -lpthreads 
+/usr/bin/ld: 找不到 -lpthreads
+collect2: error: ld returned 1 exit status
+CMakeFiles/cmTC_cce8f.dir/build.make:97: recipe for target 'cmTC_cce8f' failed
+make[1]: *** [cmTC_cce8f] Error 1
+make[1]: 离开目录“/home/zzu/scene_seal/align-cuda/build/CMakeFiles/CMakeTmp”
+Makefile:126: recipe for target 'cmTC_cce8f/fast' failed
+make: *** [cmTC_cce8f/fast] Error 2
+
+
