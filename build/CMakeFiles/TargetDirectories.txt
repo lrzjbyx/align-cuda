@@ -1,3 +1,0 @@
-/home/zzu/scene_seal/align-cuda/build/CMakeFiles/rebuild_cache.dir
-/home/zzu/scene_seal/align-cuda/build/CMakeFiles/edit_cache.dir
-/home/zzu/scene_seal/align-cuda/build/CMakeFiles/sealnet_align.dir
