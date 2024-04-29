@@ -1,14 +1,16 @@
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
+#include <opencv2/opencv.hpp>
 #include <cuda_runtime.h>
 #include<iostream>
 #include<cmath>
 #include<vector>
-#include<opencv2/opencv.hpp>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <device_launch_parameters.h>
-#include<algorithm>
 using json = nlohmann::json;
 
+#define GPU_BLOCK_THREADS  512
 
 #define CHECK(call)\
 {\
@@ -23,41 +25,167 @@ using json = nlohmann::json;
 
 
 
-__global__ void line_align_cuda(float * map_x_array,float * map_y_array,float * hh,float * ll,float x0,float y0,float t,int w,int h)
-{
-
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-
+__global__ void line_align_cuda(uint8_t*  src,uint8_t*  dst,int src_width, int src_height, int dst_width, int dst_height,float x,float y,float h,float l,float ro,uint8_t const_value_st, int edge){
     
+    
+    int position = blockDim.x * blockIdx.x + threadIdx.x;
+    if (position >= edge) return;
 
-    // if(j < h && i < w && i==0) {
-    if(j < h && i < w) {
-        float tx = x0 - hh[j] * cosf(M_PI/2 - (t * M_PI / 180.0));
-        float ty = y0 + hh[j] * sinf(M_PI/2 - (t * M_PI / 180.0));
+    int dx      = position % dst_width;  // i
+    int dy      = position / dst_width;  // j
+
+    float hh = - dst_height/2 + dy * h/dst_height;
+    float ll = - dst_width/2 + dx * l/dst_width;
+
+    float tx = x - hh * cosf(M_PI/2 - ro);
+    float ty = y + hh * sinf(M_PI/2 - ro);
+
+    // float src_x = tx + ll* cosf(ro * M_PI / 180.0);
+    // float src_y = ty + ll* sinf(ro * M_PI / 180.0);
+    
+    // float tx = x + hh * cosf(ro);
+    // float ty = y - hh * sinf(ro);
+    
+    float src_x = tx + ll* cosf(ro);
+    float src_y = ty + ll* sinf(ro);
+    float c0, c1, c2;
+
+
+    if(src_x <= -1 || src_x >= src_width || src_y <= -1 || src_y >= src_height){
+        // out of range
+        c0 = const_value_st;
+        c1 = const_value_st;
+        c2 = const_value_st;
+    }else{
+        int y_low = floorf(src_y);
+        int x_low = floorf(src_x);
+        int y_high = y_low + 1;
+        int x_high = x_low + 1;
+
+        uint8_t const_value[] = {const_value_st, const_value_st, const_value_st};
+        float ly    = src_y - y_low;
+        float lx    = src_x - x_low;
+        float hy    = 1 - ly;
+        float hx    = 1 - lx;
+        float w1    = hy * hx, w2 = hy * lx, w3 = ly * hx, w4 = ly * lx;
+        uint8_t* v1 = const_value;
+        uint8_t* v2 = const_value;
+        uint8_t* v3 = const_value;
+        uint8_t* v4 = const_value;
+        if(y_low >= 0){
+            if (x_low >= 0)
+                v1 = src + y_low * (src_width * 3 ) + x_low * 3;
+
+            if (x_high < src_width)
+                v2 = src + y_low * (src_width * 3 ) + x_high * 3;
+        }
         
-        float x1 = tx + ll[i]* cosf(t * M_PI / 180.0);
-        float y1 = ty + ll[i]* sinf(t * M_PI / 180.0);
+        if(y_high < src_height){
+            if (x_low >= 0)
+                v3 = src + y_high * (src_width * 3 ) + x_low * 3;
 
-        map_x_array[j*w+i] = x1;
-        map_y_array[j*w+i] = y1;
-        // printf("hh[%d]=%f\t\t----->i=%d\tj=%d\tw=%d\th=%d\tx1=%f\ty1=%f\ttx=%f\tty=%f\n",j,hh[j],i,j,w,h,x1,y1,tx,ty);
+            if (x_high < src_width)
+                v4 = src + y_high * (src_width * 3 ) + x_high * 3;
+        }
+
+        // same to opencv
+        c0 = floorf(w1 * v1[0] + w2 * v2[0] + w3 * v3[0] + w4 * v4[0] + 0.5f);
+        c1 = floorf(w1 * v1[1] + w2 * v2[1] + w3 * v3[1] + w4 * v4[1] + 0.5f);
+        c2 = floorf(w1 * v1[2] + w2 * v2[2] + w3 * v3[2] + w4 * v4[2] + 0.5f);
     }
+
+
+
+    uint8_t* pdst_c0 = dst + (dy * dst_width + dx) * 3;
+    uint8_t* pdst_c1 = pdst_c0 + 1;
+    uint8_t* pdst_c2 = pdst_c1 + 1;
+
+    *pdst_c0 = static_cast<uint8_t>(c0);
+    *pdst_c1 = static_cast<uint8_t>(c1);
+    *pdst_c2 = static_cast<uint8_t>(c2);
+
+
+
 }
 
 
-__global__ void arc_align_cuda(float * map_x_array,float * map_y_array,float * xx,float *aa,float *bb,float x0,float y0,float ro,int w,int h){
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
 
-    
-    // if(j < h && i < w && i==0) {
-    if(j < h && i < w) {
-        float x1 = x0 + aa[j] * cosf(xx[i])*cosf(ro) + bb[j]* sinf(xx[i])*sinf(ro); 
-        float y1 = y0 + aa[j] *cosf(xx[i])*sinf(ro) - bb[j]*sinf(xx[i])*cosf(ro);
-        map_x_array[j*w+i] = x1;
-        map_y_array[j*w+i] = y1;
+
+__global__ void arc_align_cuda(uint8_t*  src,uint8_t*  dst,int src_width, int src_height, int dst_width, int dst_height,float x,float y,float a,float b,float h,float ro,float st,float se,uint8_t const_value_st, int edge)
+{
+
+    int position = blockDim.x * blockIdx.x + threadIdx.x;
+    if (position >= edge) return;
+
+    int dx      = position % dst_width;  // i
+    int dy      = position / dst_width;  // j
+
+    //    std::vector<float> xx = linspace(start_angle, start_angle + span_angle,  width);
+    //    每个位置对应的角度
+    float xx = se - dx *(se-st) / dst_width;
+    float aa = (a + h/2 ) - dy * h / dst_height;
+    float bb = (b + h/2 ) - dy * h / dst_height;
+
+    //std::pair<float,float> xy = oval(cc[0],cc[1],aa[j],xx[i],ro,bb[j]);   
+
+    float src_x = x + aa * cosf(xx) * cosf(ro) + bb * sinf(xx) * sinf(ro);
+    float src_y = y + aa * cosf(xx) * sinf(ro) - bb * sinf(xx) * cosf(ro);
+    float c0, c1, c2;
+
+    if(src_x <= -1 || src_x >= src_width || src_y <= -1 || src_y >= src_height){
+        // out of range
+        c0 = const_value_st;
+        c1 = const_value_st;
+        c2 = const_value_st;
+    }else{
+        int y_low = floorf(src_y);
+        int x_low = floorf(src_x);
+        int y_high = y_low + 1;
+        int x_high = x_low + 1;
+
+        uint8_t const_value[] = {const_value_st, const_value_st, const_value_st};
+        float ly    = src_y - y_low;
+        float lx    = src_x - x_low;
+        float hy    = 1 - ly;
+        float hx    = 1 - lx;
+        float w1    = hy * hx, w2 = hy * lx, w3 = ly * hx, w4 = ly * lx;
+        uint8_t* v1 = const_value;
+        uint8_t* v2 = const_value;
+        uint8_t* v3 = const_value;
+        uint8_t* v4 = const_value;
+        if(y_low >= 0){
+            if (x_low >= 0)
+                v1 = src + y_low * (src_width * 3 ) + x_low * 3;
+
+            if (x_high < src_width)
+                v2 = src + y_low * (src_width * 3 ) + x_high * 3;
+        }
+        
+        if(y_high < src_height){
+            if (x_low >= 0)
+                v3 = src + y_high * (src_width * 3 ) + x_low * 3;
+
+            if (x_high < src_width)
+                v4 = src + y_high * (src_width * 3 ) + x_high * 3;
+        }
+
+        // same to opencv
+        c0 = floorf(w1 * v1[0] + w2 * v2[0] + w3 * v3[0] + w4 * v4[0] + 0.5f);
+        c1 = floorf(w1 * v1[1] + w2 * v2[1] + w3 * v3[1] + w4 * v4[1] + 0.5f);
+        c2 = floorf(w1 * v1[2] + w2 * v2[2] + w3 * v3[2] + w4 * v4[2] + 0.5f);
     }
+
+
+
+    uint8_t* pdst_c0 = dst + (dy * dst_width + dx) * 3;
+    uint8_t* pdst_c1 = pdst_c0 + 1;
+    uint8_t* pdst_c2 = pdst_c1 + 1;
+
+    *pdst_c0 = static_cast<uint8_t>(c0);
+    *pdst_c1 = static_cast<uint8_t>(c1);
+    *pdst_c2 = static_cast<uint8_t>(c2);
+
+
 }
 
 
@@ -68,6 +196,7 @@ static double radians(double t) {
 
 
 
+
 static int elliptical_arc_length( float a, float  b, float  theta1, float  theta2){
     float h = std::pow(((a - b) / (a + b)), 2);
     float L = M_PI * (a + b) * (1 + ((3 * h) / (10 + sqrt(4 - 3 * h))));
@@ -75,171 +204,139 @@ static int elliptical_arc_length( float a, float  b, float  theta1, float  theta
 }
 
 
-
-static std::vector<float> linspace(float start, float end, int num){
-
-    std::vector<float> points(num);
-    float step = static_cast<float>(end - start) / (num - 1);
-
-    for (int i = 0; i < num; ++i) {
-        points[i] = start + i * step;
-    }
-
-    return points;
+static dim3 grid_dims(int numJobs) {
+    int numBlockThreads = numJobs < GPU_BLOCK_THREADS ? numJobs : GPU_BLOCK_THREADS;
+    return dim3(((numJobs + numBlockThreads - 1) / (float)numBlockThreads));
 }
 
-
-
-
+static dim3 block_dims(int numJobs) {
+    return numJobs < GPU_BLOCK_THREADS ? numJobs : GPU_BLOCK_THREADS;
+}
 
 cv::Mat arc_align(cv::Mat image, json item){
-    float ro = radians(item["rotation"].get<float>());
+    // float ro = radians(item["rotation"].get<float>());
     float start_angle = radians(item["startAngle"].get<float>() / 16);
     float span_angle = radians(item["spanAngle"].get<float>()/16 );
 
-    int width = elliptical_arc_length(item["a"].get<float>(),item["b"].get<float>(),start_angle,start_angle + span_angle);
-    int height = item["h"];
-    // 坐标圆点
+    int dst_width = elliptical_arc_length(item["a"].get<float>(),item["b"].get<float>(),start_angle,start_angle + span_angle);
+    int dst_height = static_cast<int>(item["h"].get<float>()); 
+
+    int jobs   = dst_width * dst_height;
+    auto grid  = grid_dims(jobs);
+    auto block = block_dims(jobs);
+
+    uint8_t*  src = image.data;
+    uint8_t*  dst = (uint8_t*)malloc(dst_width*dst_height*3);
+    int src_width = image.cols;
+    int src_height  =  image.rows;
+
     std::vector<float> cc = {item["rect"][2].get<float>() / 2 + item["x"].get<float>() + 
-    item["rect"][0].get<float>(),item["rect"][3].get<float>() / 2 + +item["y"].get<float>() + item["rect"][1].get<float>()};
-    std::vector<float> xx = linspace(start_angle, start_angle + span_angle,  width);
-    std::vector<float> aa = linspace(item["a"].get<float>() - (item["h"].get<float>() / 2),item["a"].get<float>() + (item["h"].get<float>() / 2),  height);
-    std::reverse(aa.begin(), aa.end());
-    std::vector<float> bb = linspace(item["b"].get<float>() - (item["h"].get<float>() / 2), item["b"].get<float>() + (item["h"].get<float>() / 2),  height);
-    std::reverse(bb.begin(), bb.end());
+    item["rect"][0].get<float>(),item["rect"][3].get<float>() / 2 + item["y"].get<float>() + item["rect"][1].get<float>()};
+    float x = cc[0];
+    float y =cc[1];
+    float a = item["a"].get<float>();
+    float b = item["b"].get<float>();
+    float h = item["h"].get<float>();
+    float ro = radians(item["rotation"].get<float>());
+    float st = start_angle;
+    float se = st + span_angle;
+    uint8_t const_value_st= 255; 
+    int edge = jobs;
 
     int dev = 0;
     cudaSetDevice(dev);
 
-    float* xx_array = xx.data();
-    float* aa_array = aa.data();
-    float* bb_array = bb.data();
+
+    uint8_t*  gpu_src; 
+    uint8_t*  gpu_dst;
+    auto size_image = src_width* src_height * 3;
+    auto dst_size_image  = dst_height* dst_width * 3;
+    cudaMalloc(&gpu_src, size_image);
+    cudaMalloc(&gpu_dst, dst_size_image);
+    cudaMemcpyAsync(gpu_src, src, size_image, cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(gpu_dst, dst, dst_size_image, cudaMemcpyHostToDevice);
+
+    arc_align_cuda<<<grid, block>>>(gpu_src,gpu_dst,src_width,src_height,dst_width,dst_height,x,y,a,b, h, ro,st,se,const_value_st,edge);
+
+    cudaMemcpyAsync(src, gpu_src, size_image, cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(dst, gpu_dst, dst_size_image, cudaMemcpyDeviceToHost);
+    
+
+    cv::Mat output(dst_height, dst_width, CV_8UC3, (void*)dst);
 
 
-    float* xx_dev = NULL;
-    float* aa_dev = NULL;
-    float* bb_dev = NULL;
+    cudaFree(gpu_src);
+    cudaFree(gpu_dst);
 
-
-    float* map_x_array = NULL;
-    float* map_y_array = NULL;
-
-    float* map_x_array_from_gpu = (float*)malloc(width*height*sizeof(float));;
-    float* map_y_array_from_gpu = (float*)malloc(width*height*sizeof(float));;
-
-    CHECK(cudaMalloc((void**)&xx_dev,width*sizeof(float)));
-    CHECK(cudaMalloc((void**)&aa_dev,height*sizeof(float)));
-    CHECK(cudaMalloc((void**)&bb_dev,height*sizeof(float)));
-
-    CHECK(cudaMalloc((void**)&map_x_array, width* height*sizeof(float)));
-    CHECK(cudaMalloc((void**)&map_y_array, width* height*sizeof(float)));
-
-    CHECK(cudaMemcpy(xx_dev,xx_array,  width*sizeof(float),cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(aa_dev,aa_array, height*sizeof(float),cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(bb_dev,bb_array, height*sizeof(float),cudaMemcpyHostToDevice));
-
-    dim3 blockDim(32, 32); // 每个block的大小为16x16
-    dim3 gridDim(( width + blockDim.x - 1) / blockDim.x, ( height + blockDim.y - 1) / blockDim.y); // 计算grid的大小
-
-    float x0 = cc[0];
-    float y0 = cc[1];
-
-    arc_align_cuda<<<gridDim, blockDim>>>(map_x_array,map_y_array,xx_dev,aa_dev,bb_dev,x0,y0,ro,width, height);
-
-    CHECK(cudaMemcpy(map_x_array_from_gpu,map_x_array, width* height*sizeof(float),cudaMemcpyDeviceToHost));
-    CHECK(cudaMemcpy(map_y_array_from_gpu,map_y_array, width* height*sizeof(float),cudaMemcpyDeviceToHost));
-
-    cv::Mat map_x = cv::Mat(width*height, 1, CV_32F, map_x_array_from_gpu).reshape(0, height);
-    cv::Mat map_y = cv::Mat(width*height, 1, CV_32F, map_y_array_from_gpu).reshape(0, height);
-
-    cv::Mat dst;
-    cv::remap(image, dst, map_x, map_y, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar());
-
-
-    cv::Mat result;
-    cv::flip(dst, result ,1);
-
-    cudaFree(xx_dev);
-    cudaFree(aa_dev);
-    cudaFree(bb_dev);
-    cudaFree(map_x_array);
-    cudaFree(map_y_array);
-    free(map_x_array_from_gpu);
-    free(map_y_array_from_gpu);
+    // free(dst);
     cudaDeviceReset();
 
+    cv::Mat bgrImage;
+    cv::cvtColor(output, bgrImage, cv::COLOR_BGR2RGB);
 
-    return result;
-
+    return output;
+    
 }
 
-cv::Mat line_align(cv::Mat image,json item){
-    int height = item["h"];
-    int width = item["l"];
-    int l = item["l"];
-    float x0 = item["rect"][2].get<float>() / 2 + item["x"].get<float>() + item["rect"][0].get<float>();
-    float y0 = item["rect"][3].get<float>() / 2 + +item["y"].get<float>() + item["rect"][1].get<float>();
-    int h = item["h"];
-    float t = item["rotation"];
 
+cv::Mat line_align(cv::Mat image,json item){
+
+    float ro = radians(item["rotation"].get<float>());
+    int dst_width  = static_cast<int>(item["l"].get<float>());
+    int dst_height  = static_cast<int>(item["h"].get<float>());
+
+    int jobs   = dst_width * dst_height;
+    auto grid  = grid_dims(jobs);
+    auto block = block_dims(jobs);
+
+    uint8_t*  src = image.data;
+    uint8_t*  dst = (uint8_t*)malloc(dst_width*dst_height*3);
+    int src_width = image.cols;
+    int src_height  =  image.rows;
+
+    float x = item["rect"][2].get<float>() / 2 + item["x"].get<float>() + item["rect"][0].get<float>();
+    float y = item["rect"][3].get<float>() / 2 + +item["y"].get<float>() + item["rect"][1].get<float>();
+
+    float h = item["h"].get<float>();
+    float l = item["l"].get<float>();
+
+
+    uint8_t const_value_st= 255; 
+    int edge = jobs;
 
     int dev = 0;
     cudaSetDevice(dev);
-    // float* hh_array = (float*)malloc(height*sizeof(float));
-    // float* ll_array = (float*)malloc(width*sizeof(float));
-    // linspace(-l / 2, l / 2, width,ll_array);
-    // linspace(-h / 2, h / 2, height,hh_array);
-
-    std::vector<float> hh = linspace(-h / 2, h / 2, height);
-    std::vector<float> ll = linspace(-l / 2, l / 2, width);
-    std::reverse(ll.begin(), ll.end());
-
-    float* hh_array = hh.data();
-    float* ll_array = ll.data();
-
-    float* map_x_array = NULL;
-    float* map_y_array = NULL;
-    float* hh_dev = NULL;
-    float* ll_dev = NULL;
-    float* map_x_array_from_gpu = (float*)malloc(width*height*sizeof(float));;
-    float* map_y_array_from_gpu = (float*)malloc(width*height*sizeof(float));;
 
 
-    CHECK(cudaMalloc((void**)&hh_dev,height*sizeof(float)));
-    CHECK(cudaMalloc((void**)&ll_dev,width*sizeof(float)));
-    CHECK(cudaMalloc((void**)&map_x_array, width* height*sizeof(float)));
-    CHECK(cudaMalloc((void**)&map_y_array, width* height*sizeof(float)));
-
-    CHECK(cudaMemcpy(hh_dev,hh_array,  height*sizeof(float),cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(ll_dev,ll_array, width*sizeof(float),cudaMemcpyHostToDevice));
-
-
-    dim3 blockDim(32, 32); // 每个block的大小为16x16
-    dim3 gridDim(( width + blockDim.x - 1) / blockDim.x, ( height + blockDim.y - 1) / blockDim.y); // 计算grid的大小
+    uint8_t*  gpu_src; 
+    uint8_t*  gpu_dst;
+    auto size_image = src_width* src_height * 3;
+    auto dst_size_image  = dst_height* dst_width * 3;
+    cudaMalloc(&gpu_src, size_image);
+    cudaMalloc(&gpu_dst, dst_size_image);
+    cudaMemcpyAsync(gpu_src, src, size_image, cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(gpu_dst, dst, dst_size_image, cudaMemcpyHostToDevice);
 
 
-    line_align_cuda<<<gridDim, blockDim>>>(map_x_array,map_y_array,hh_dev,ll_dev,x0,y0,t, width,  height);
+    line_align_cuda<<<grid, block>>>(gpu_src,gpu_dst,src_width,src_height,dst_width,dst_height,x,y,h,l, ro,const_value_st,edge);
 
-
-    CHECK(cudaMemcpy(map_x_array_from_gpu,map_x_array, width* height*sizeof(float),cudaMemcpyDeviceToHost));
-    CHECK(cudaMemcpy(map_y_array_from_gpu,map_y_array, width* height*sizeof(float),cudaMemcpyDeviceToHost));
-
-    cv::Mat map_x = cv::Mat(width*height, 1, CV_32F, map_x_array_from_gpu).reshape(0, height);
-    cv::Mat map_y = cv::Mat(width*height, 1, CV_32F, map_y_array_from_gpu).reshape(0, height);
-
-
-    cv::Mat dst;
-    cv::remap(image, dst, map_x, map_y, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar());
-
-    cudaFree(hh_dev);
-    cudaFree(ll_dev);
-    cudaFree(map_x_array);
-    cudaFree(map_y_array);
-    free(map_x_array_from_gpu);
-    free(map_y_array_from_gpu);
-    cudaDeviceReset();
+    cudaMemcpyAsync(src, gpu_src, size_image, cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(dst, gpu_dst, dst_size_image, cudaMemcpyDeviceToHost);
     
-    return dst;
+
+    cv::Mat output(dst_height, dst_width, CV_8UC3, (void*)dst);
+
+    cudaFree(gpu_src);
+    cudaFree(gpu_dst);
+
+    // free(dst);
+    cudaDeviceReset();
+
+    cv::Mat bgrImage;
+    cv::cvtColor(output, bgrImage, cv::COLOR_BGR2RGB);
+
+
+    return output;
 
 }
 
@@ -258,12 +355,8 @@ cv::Mat run(cv::Mat image, json item){
 
 }
 
+using json = nlohmann::json;
 
-
-#include <nlohmann/json.hpp>
-#include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
-#include <opencv2/opencv.hpp>
 
 namespace py = pybind11;
 using json = nlohmann::json;
