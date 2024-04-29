@@ -29,7 +29,8 @@ include_directories(${Boost_INCLUDE_DIRS} ${PYTHON_INCLUDE_DIRS} ${CUDA_INCLUDE_
 
 
 # add_executable(SEALNET_ALIGN main.cpp align.cpp sealnet_align.cpp)
-add_library(sealnet_align MODULE  main.cu)
+# add_library(sealnet_align MODULE main.cu)
+add_library(sealnet_align MODULE main.cu)
 # add_executable(sealnet_align align.cu main.cu)
 # add_executable(sealnet_align main.cu)
 

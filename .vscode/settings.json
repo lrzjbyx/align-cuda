@@ -74,6 +74,13 @@
         "cinttypes": "cpp",
         "typeindex": "cpp",
         "variant": "cpp",
-        "__tuple": "cpp"
-    }
+        "__tuple": "cpp",
+        "bit": "cpp",
+        "compare": "cpp",
+        "concepts": "cpp",
+        "random": "cpp",
+        "ranges": "cpp",
+        "__config": "cpp"
+    },
+    "C_Cpp.errorSquiggles": "enabled"
 }
